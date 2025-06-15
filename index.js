@@ -1,60 +1,70 @@
 import express from 'express';
-import dotenv from 'dotenv';
+import Stripe from 'stripe';
 import cors from 'cors';
-import fetch from 'node-fetch';
+import dotenv from 'dotenv';
 
 dotenv.config();
-const app = express();
-const PORT = process.env.PORT || 3000;
 
+const app = express();
 app.use(cors());
 app.use(express.json());
 
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2025-04-30.basil',
+    appInfo: { name: 'GlideX' },
+});
+
 app.post('/create-payment', async (req, res) => {
     try {
-        const { name, email, amount } = req.body;
-        const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+        const { name, email } = req.body;
+        let amount = req.body.amount;
 
-        const stripeRequest = async (path, params, headers = {}) => {
-            const response = await fetch(`https://api.stripe.com/v1/${path}`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${stripeSecretKey}`,
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    ...headers,
-                },
-                body: new URLSearchParams(params),
-            });
+        amount = amount ? Math.abs(parseFloat(amount)) : 40;
+        const amountInCents = Math.round(amount * 100);
 
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error?.message || 'Stripe Error');
-            return data;
-        };
+        if (!name || !email || !amountInCents || amountInCents <= 0) {
+            return res.status(400).json({ error: 'Please enter valid details' });
+        }
 
-        const customer = await stripeRequest('customers', { email, name });
-        const ephemeralKey = await stripeRequest(
-            'ephemeral_keys',
+        // Check if customer exists
+        let customer;
+        const existing = await stripe.customers.list({ email });
+        if (existing.data.length > 0) {
+            customer = existing.data[0];
+        } else {
+            customer = await stripe.customers.create({ email, name });
+        }
+
+        // Create ephemeral key
+        const ephemeralKey = await stripe.ephemeralKeys.create(
             { customer: customer.id },
-            { 'Stripe-Version': '2023-10-16' }
+            { apiVersion: '2025-03-31.basil' }
         );
-        const paymentIntent = await stripeRequest('payment_intents', {
-            amount: Math.round(Number(amount) * 100).toString(),
+
+        // Create payment intent
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount: amountInCents,
             currency: 'usd',
             customer: customer.id,
         });
 
-        res.json({
-            customer: customer.id,
-            ephemeralKey: ephemeralKey.secret,
+        return res.json({
             paymentIntent: paymentIntent.client_secret,
             paymentIntentId: paymentIntent.id,
+            customer: customer.id,
+            ephemeralKey: ephemeralKey.secret,
         });
     } catch (error) {
-        console.error('Payment error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Payment Error:', error);
+        return res.status(400).json({
+            error: error?.message || 'Something went wrong',
+        });
     }
 });
 
-app.get('/', (_, res) => res.send('Stripe backend running ✅'));
+app.get('/', (_, res) => {
+    res.send('GlideX Stripe server is running ✅');
+});
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
