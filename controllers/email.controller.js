@@ -54,7 +54,7 @@ export const sendEmail = async (req, res) => {
     try {
         const msg = {
             to,
-            from: 'gauravrajahela884@gmail.com', // Must match your verified sender
+            from: 'gauravtheking884@gmail.com', // Must match your verified sender
             subject,
             text,
             html,
